@@ -46,6 +46,10 @@
         button:hover{border-color:rgba(122,162,255,.9)}
         .note{border-left:3px solid rgba(122,162,255,.8);padding:10px 12px;background:rgba(122,162,255,.08);border-radius:12px;color:var(--muted);font-size:12px;line-height:1.45}
         code{font-family:var(--mono);font-size:12px;color:#cfe0ff}
+        .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%) translateY(20px);opacity:0;pointer-events:none;
+            padding:10px 14px;border-radius:12px;border:1px solid var(--line);background:rgba(18,24,38,.95);color:var(--warn);
+            font-size:12px;transition:opacity .25s ease, transform .25s ease;z-index:1000;max-width:90vw;text-align:center}
+        .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
     </style>
 </head>
 <body>
@@ -172,6 +176,8 @@
         </div>
     </div>
 </div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script>
     const $ = (id) => document.getElementById(id);
@@ -427,7 +433,6 @@
     }
 
     function reset(){
-
         $('s0').value = '0';
         $('save').value = '2000';
         $('price').value = '250000';
@@ -455,6 +460,16 @@
         const dd = String(now.getDate()).padStart(2,'0');
         $('startDate').value = `${yyyy}-${mm}-${dd}`;
 
+        let toastTimer = null;
+        const showToast = (msg) => {
+            const el = $('toast');
+            if (!el) return;
+            el.textContent = msg;
+            el.classList.add('show');
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(()=>el.classList.remove('show'), 2800);
+        };
+
         $('calcBtn').addEventListener('click', calc);
         $('resetBtn').addEventListener('click', reset);
 
@@ -475,6 +490,59 @@
         $('rent').addEventListener('input', recomputeCap);
         $('save').addEventListener('input', recomputeCap);
         $('rentGrow').addEventListener('input', recomputeCap);
+
+        let syncLock = false;
+        const baseLoanAmount = () => {
+            const price0 = +$('price').value || 0;
+            const dpPct = +$('dpPct').value || 0;
+            return Math.max(0, price0 * (1 - dpPct));
+        };
+        const roundPayment = (x) => Math.max(0, Math.round(x / 10) * 10);
+        const syncMortgageInputs = (source) => {
+            if (syncLock) return;
+            syncLock = true;
+            const loan = baseLoanAmount();
+            const apr = (+$('apr').value || 0) / 100;
+            const rMonth = apr / 12;
+            const maxYears = Math.max(1, Math.round(+$('maxYears').value || 1));
+            const payCap = +$('payCap').value || 0;
+
+            if (source === 'payCap'){
+                const payment = Math.max(0, payCap);
+                let months = 0;
+                if (loan > 0 && payment > 0){
+                    if (Math.abs(rMonth) < 1e-12){
+                        months = loan / payment;
+                    } else {
+                        const denom = payment - loan * rMonth;
+                        months = denom > 0 ? (Math.log(payment / denom) / Math.log(1 + rMonth)) : Infinity;
+                    }
+                }
+                const nextYears = Math.max(1, Math.ceil(months / 12));
+                if (Number.isFinite(nextYears) && nextYears !== maxYears){
+                    $('maxYears').value = String(nextYears);
+                    showToast('Срок ипотеки изменился под новые данные');
+                }
+            } else {
+                const months = maxYears * 12;
+                let payment = 0;
+                if (loan > 0 && months > 0){
+                    payment = pmt(rMonth, months, -loan);
+                }
+                const nextPayment = roundPayment(payment);
+                if (Number.isFinite(nextPayment) && nextPayment !== payCap){
+                    $('payCap').value = String(nextPayment);
+                    payTouched = true;
+                    showToast('Макс платёж/мес изменился под новые данные');
+                }
+            }
+
+            syncLock = false;
+        };
+
+        $('apr').addEventListener('input', ()=>syncMortgageInputs('apr'));
+        $('maxYears').addEventListener('input', ()=>syncMortgageInputs('maxYears'));
+        $('payCap').addEventListener('input', ()=>syncMortgageInputs('payCap'));
 
         reset();
     })();
